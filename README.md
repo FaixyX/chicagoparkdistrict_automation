@@ -48,7 +48,7 @@ After activation, you should see `(venv)` at the beginning of your command promp
 Install the required packages:
 
 ```bash
-pip install drissionpage pandas
+pip install drissionpage pandas python-dotenv
 ```
 
 ### Step 4: Configure Your Settings
