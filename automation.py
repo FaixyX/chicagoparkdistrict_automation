@@ -1,3 +1,47 @@
+# =========================
+# SAFETY / LOGGING LAYER
+# =========================
+import sys, traceback, logging, time
+from pathlib import Path
+from datetime import datetime
+
+BASE_DIR = Path(__file__).parent
+LOG_DIR = BASE_DIR / "logs"
+SCREENSHOT_DIR = BASE_DIR / "screenshots"
+
+LOG_DIR.mkdir(exist_ok=True)
+SCREENSHOT_DIR.mkdir(exist_ok=True)
+
+RUN_TS = datetime.now().strftime("%Y%m%d_%H%M%S")
+LOG_FILE = LOG_DIR / f"automation_{RUN_TS}.log"
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(message)s",
+    handlers=[
+        logging.FileHandler(LOG_FILE),
+        logging.StreamHandler(sys.stdout),
+    ],
+)
+
+logging.info("========== AUTOMATION START ==========")
+
+def crash_handler(exc_type, exc_value, exc_tb):
+    logging.critical("UNCAUGHT EXCEPTION", exc_info=(exc_type, exc_value, exc_tb))
+    try:
+        if "tab" in globals():
+            shot = SCREENSHOT_DIR / f"crash_{RUN_TS}.png"
+            tab.screenshot(path=str(shot))
+            logging.info(f"Screenshot saved: {shot}")
+    except Exception as e:
+        logging.error(f"Screenshot failed: {e}")
+
+sys.excepthook = crash_handler
+
+# =========================
+# ORIGINAL SCRIPT START
+# =========================
+
 from DrissionPage import Chromium, ChromiumOptions
 from time import sleep
 import datetime, random
@@ -14,17 +58,13 @@ from human_utils import (
     go_to,
     click_js,
 )
-import os
-from dotenv import load_dotenv
 
-# Load environment variables from .env file
-load_dotenv()
+# Replace placeholders with your actual details:
+USERNAME = "jlesnick87@gmail.com"
+PASSWORD = "tizbox-mutqEt-voqdo3"
+CVV_CODE = "123"
 
-# Get credentials from environment variables
-USERNAME = os.getenv("USERNAME")
-PASSWORD = os.getenv("PASSWORD")
-CVV_CODE = os.getenv("CVV_CODE")
-EVENT_NAME = os.getenv("EVENT_NAME")
+EVENT_NAME = "My Tennis Booking"
 # TARGET_DATE = input("Enter your preferred date (YYYY-MM-DD): ").strip()
 
 
@@ -49,11 +89,13 @@ def format_start_end_time(user_input):
         minute = dt.minute
         am_pm = dt.strftime("%p")
         return f"{hour}:{minute:02d} {am_pm}"
-    
+
     start_time = format_time(start_dt)   # 6:00 AM
     end_time = format_time(end_dt)       # 7:00 AM
 
     return start_time, end_time
+
+import pandas as pd
 
 # Read Excel (times.xlsx must be in same folder)
 df = pd.read_excel("times.xlsx")
@@ -142,7 +184,7 @@ if is_logged_in():
     print(" -> Navigating to quick reservation page...")
     tab.get("https://anc.apm.activecommunities.com/chicagoparkdistrict/home?onlineSiteId=0&from_original_cui=true")
     sleep(random.uniform(1.0, 2.5))
-    
+
     # Click "Clear all bookings" button to start fresh
     print(" -> Clicking 'Clear all bookings' button...")
     clear_btn = tab.ele('css:button[aria-label="Clear all bookings"]', timeout=10)
@@ -185,7 +227,7 @@ if view_all_btn:
     print("✅ Clicked 'View all'")
     sleep(random.uniform(3, 4.5))
 else:
-    print("❌ 'View all' button not found!")	
+    print("❌ 'View all' button not found!")
 
 facility_btn = tab.ele('xpath://div[contains(@class,"dropdown__button") and .//span[text()="Facility/Equipment Group"]]', timeout=10)
 
@@ -230,15 +272,15 @@ event_input = tab.ele('css:input[data-qa-id="quick-reservation-eventType-name"]'
 event_input.clear()
 sleep(random.uniform(0.5, 1.5))
 human_input(event_input, EVENT_NAME)
-
+SAVE_BUTTON_XPATH = "//button[contains(., 'Save')]"
 def wait_until_booking_time():
     """Wait for 10 minutes before proceeding with booking"""
-    wait_seconds = 600  # 10 minutes
+    wait_seconds = 5  # 10 minutes
     now = datetime.now()
-    
+
     print(f"\n⏰ Current time: {now.strftime('%I:%M:%S %p')}")
     print(f"⏰ Waiting {wait_seconds // 60} minutes before proceeding with booking...")
-    
+
     # Wait with countdown updates
     start_time = datetime.now()
     last_printed_seconds = -1
@@ -254,27 +296,35 @@ def wait_until_booking_time():
                 print(f"   ⏳ {minutes:02d}:{secs:02d} remaining...")
                 last_printed_seconds = secs
         sleep(1)
-    
+
     print(f"✅ Wait complete! Current time: {datetime.now().strftime('%I:%M:%S %p')}")
     print("🚀 Proceeding with booking now...\n")
+
+FAILED_COURTS = []
 
 def select_time_slot():
     """Select an available time slot from preferred times"""
     booking_successful = False
     selected_time_slot = None
-    
+    court_label = None
+
     # Wait and click on available slot from given ones
     for start_time, end_time in PREFERRED_TIMES:
         print(f" -> Searching for available court at {start_time} - {end_time}...")
-        
+
         court_xpath = (
                 f"//div[contains(@aria-label, 'Tennis') "
                 f"and contains(@aria-label, '{start_time} - {end_time}') "
                 f"and contains(@aria-label, 'Available')]"
             )
 
-        court_cell = tab.ele(f'xpath:{court_xpath}', timeout=2)  # Returns NoneElement if not found
-        if not court_cell:
+        court_cells = tab.eles(f'xpath:{court_xpath}', timeout=2)  # Returns NoneElement if not found
+        # court_label = court_cell.attr('aria-label') if court_cell else None
+        if court_label and (start_time, end_time, court_label) in FAILED_COURTS:
+            print(f" -> Skipping failed court: {court_label}")
+            continue
+
+        if not court_cells:
             print(f" -> Court at {start_time} - {end_time} not available.")
             sleep(random.uniform(0.5, 1.5))
             continue  # Try next time slot
@@ -298,23 +348,31 @@ def select_time_slot():
 
 
         # Click the court
-        human_click(court_cell)
-        print(f" -> Court at {start_time} - {end_time} clicked.")
-        sleep(random.uniform(0.5, 1.5))
+        for court_cell in court_cells:
+            court_label = court_cell.attr('aria-label')
+            if (start_time, end_time, court_label) in FAILED_COURTS:
+                print(f" -> Skipping failed court: {court_label}")
+                continue
+
+            human_click(court_cell)
+            print(f" -> Court clicked: {court_label}")
+            sleep(random.uniform(0.5, 1.5))
 
         # Click ball machine if needed
-        if NEED_BALL_MACHINE and machine_cell:
-            human_click(machine_cell)
-            sleep(random.uniform(3.5, 4.5))
-            print(" -> Ball Machine clicked.")
+            if NEED_BALL_MACHINE and machine_cell:
+                human_click(machine_cell)
+                sleep(random.uniform(3.5, 4.5))
+                print(" -> Ball Machine clicked.")
 
-        booking_successful = True
-        selected_time_slot = f"{start_time} - {end_time}"
-        break  # Exit the loop because we booked successfully
-    
-    return booking_successful, selected_time_slot
+            booking_successful = True
+            selected_time_slot = f"{start_time} - {end_time}"
+            break  # Exit the loop because we booked successfully
+        if booking_successful:
+            break
 
-booking_successful, selected_time_slot = select_time_slot()
+    return booking_successful, selected_time_slot, court_label
+
+booking_successful, selected_time_slot, court_label = select_time_slot()
 
 if not booking_successful:
     print("❌ FAILED: No available slot found matching all criteria.")
@@ -336,12 +394,12 @@ if booking_successful:
         print("❌ Confirm button not found!")
         raise Exception("Confirm button missing")
     sleep(random.uniform(0.5, 5.5))
-    
+
     # Check for Service Error
     error_modal = tab.ele('css:h3.modal-title', timeout=2)
     if error_modal and error_modal.text == "Service Error":
         print("⚠️ Service Error detected! Handling error recovery...")
-        
+
         # Click OK button (button.btn.btn-strong with type="submit" containing span with "OK" text)
         ok_btn = tab.ele('xpath://button[@class="btn btn-strong" and @type="submit" and .//span[contains(translate(text(), "ok", "OK"), "OK")]]', timeout=10)
         if not ok_btn:
@@ -354,7 +412,7 @@ if booking_successful:
         else:
             print("❌ OK button not found!")
             raise Exception("OK button missing")
-        
+
         # Click Clear all bookings button
         clear_btn = tab.ele('css:button[aria-label="Clear all bookings"]', timeout=10)
         if clear_btn:
@@ -364,7 +422,7 @@ if booking_successful:
         else:
             print("❌ Clear all bookings button not found!")
             raise Exception("Clear all bookings button missing")
-        
+
         # Reselect the time slot
         print(" -> Reselecting time slot...")
         booking_successful, selected_time_slot = select_time_slot()
@@ -373,7 +431,7 @@ if booking_successful:
     error_modal = tab.ele('css:h3.modal-title', timeout=2)
     if error_modal and error_modal.text == "Service Error":
         print("⚠️ Service Error detected! Handling error recovery...")
-        
+
         # Click OK button (button.btn.btn-strong with type="submit" containing span with "OK" text)
         ok_btn = tab.ele('xpath://button[@class="btn btn-strong" and @type="submit" and .//span[contains(translate(text(), "ok", "OK"), "OK")]]', timeout=10)
         if not ok_btn:
@@ -386,7 +444,7 @@ if booking_successful:
         else:
             print("❌ OK button not found!")
             raise Exception("OK button missing")
-        
+
         # Click Clear all bookings button
         clear_btn = tab.ele('css:button[aria-label="Clear all bookings"]', timeout=10)
         if clear_btn:
@@ -396,18 +454,18 @@ if booking_successful:
         else:
             print("❌ Clear all bookings button not found!")
             raise Exception("Clear all bookings button missing")
-        
+
         # Reselect the time slot
         print(" -> Reselecting time slot...")
         booking_successful, selected_time_slot = select_time_slot()
-        
+
         if booking_successful:
             # Click confirm button again
             confirm_btn = tab.ele(f"css:{CONFIRM_BUTTON_CSS}", timeout=10)
             if confirm_btn:
                 human_click(confirm_btn)
                 print(" -> Clicked confirm button again after error recovery")
-                
+
             else:
                 print("❌ Confirm button not found after error recovery!")
                 raise Exception("Confirm button missing after error recovery")
@@ -415,14 +473,46 @@ if booking_successful:
             print("❌ Failed to reselect time slot after error recovery!")
             raise Exception("Could not reselect time slot")
 
-    SAVE_BUTTON_XPATH = "//button[contains(., 'Save')]"
-
     save_btn = tab.ele(f'xpath:{SAVE_BUTTON_XPATH}', timeout=10)
     if save_btn:
+        print("Save button found!")
         human_click(save_btn)
-        sleep(random.uniform(3.5, 5.5))
+        sleep(random.uniform(2.5, 3.5))
     else:
-        print("❌ Save button not found!")
+        print("⚠️ Save button not found — clearing bookings and retrying time selection...")
+        if selected_time_slot and court_label:
+            start_time, end_time = selected_time_slot.split(" - ")
+            FAILED_COURTS.append((start_time, end_time, court_label))
+            print(f" -> Marked court as failed: {court_label}")
+
+
+        clear_btn = tab.ele('css:button[aria-label="Clear all bookings"]', timeout=10)
+        if clear_btn:
+            human_click(clear_btn)
+            sleep(random.uniform(1.0, 2.5))
+            print(" -> Cleared all bookings")
+        else:
+            raise Exception("Clear all bookings button missing")
+
+        booking_successful, selected_time_slot, court_label = select_time_slot()
+        if booking_successful:
+            print("Step E:Again, Processing confirmation steps...")
+            confirm_btn = tab.ele(f"css:{CONFIRM_BUTTON_CSS}", timeout=10)
+            if confirm_btn:
+                human_click(confirm_btn)
+                sleep(random.uniform(0.5, 5.5))
+            else:
+                raise Exception("Confirm button missing after retry")
+
+            save_btn = tab.ele(f'xpath:{SAVE_BUTTON_XPATH}', timeout=5)
+            if save_btn:
+               human_click(save_btn)
+               sleep(random.uniform(3.5, 5.5))
+               print(" -> Save button clicked after retry")
+            else:
+                raise Exception("Save button still missing after retry")
+        else:
+            raise Exception("No available courts after retry")
 
     DISCLAIMER_INPUT_XPATH = "//input[@data-qa-id='disclaimer-checkbox-18']"
     checkbox_input = tab.ele(f'xpath:{DISCLAIMER_INPUT_XPATH}', timeout=10)
@@ -462,17 +552,17 @@ if booking_successful:
             print(f" -> Error with human_click, using JavaScript click: {e}")
             tab.run_js("arguments[0].click();", reserve_btn)
         sleep(random.uniform(3, 5.0))
-        
+
         # Wait a bit and check if we're on checkout page
         sleep(random.uniform(0.5, 1.0))
         is_on_checkout = "checkout" in tab.url
-        
+
         # If not on checkout, check for Service Error modal
         if not is_on_checkout:
             error_modal = tab.ele('css:h3.modal-title', timeout=3)
             if error_modal and error_modal.text == "Service Error":
                 print("⚠️ Service Error detected after Reserve button click! Handling error recovery...")
-                
+
                 # Click OK button (button.btn.btn-strong with type="submit" containing span with "OK" text)
                 ok_btn = tab.ele('xpath://button[@class="btn btn-strong" and @type="submit" and .//span[contains(translate(text(), "ok", "OK"), "OK")]]', timeout=10)
                 if not ok_btn:
@@ -485,7 +575,7 @@ if booking_successful:
                 else:
                     print("❌ OK button not found!")
                     raise Exception("OK button missing")
-                
+
                 # Click Clear all bookings button
                 clear_btn = tab.ele('css:button[aria-label="Clear all bookings"]', timeout=10)
                 if clear_btn:
@@ -495,11 +585,11 @@ if booking_successful:
                 else:
                     print("❌ Clear all bookings button not found!")
                     raise Exception("Clear all bookings button missing")
-                
+
                 # Reselect the time slot
                 print(" -> Reselecting time slot...")
                 booking_successful, selected_time_slot = select_time_slot()
-                
+
                 if booking_successful:
                     # Click confirm button again
                     confirm_btn = tab.ele(f"css:{CONFIRM_BUTTON_CSS}", timeout=10)
@@ -507,17 +597,17 @@ if booking_successful:
                         human_click(confirm_btn)
                         print(" -> Clicked confirm button again after error recovery")
                         sleep(random.uniform(0.5, 1.5))
-                                 
+
                         checkbox_input = tab.ele(f'xpath:{DISCLAIMER_INPUT_XPATH}', timeout=10)
                         if checkbox_input:
                             human_click(checkbox_input)
                             sleep(random.uniform(0.5, 1.5))
-                        
+
                         save_btn = tab.ele(f'xpath:{SAVE_BUTTON_XPATH}', timeout=10)
                         if save_btn:
                             human_click(save_btn)
                             sleep(random.uniform(0.5, 1.5))
-                        
+
                         # Click Reserve button again
                         tab.refresh()
                         reserve_btn = tab.ele(f"css:{RESERVE_BTN_CSS}", timeout=10)
@@ -618,3 +708,26 @@ if booking_successful:
 
 sleep(random.uniform(15, 25))
 tab.close()
+
+
+# =========================
+# RETRY HARNESS (BOTTOM)
+# =========================
+
+MAX_RETRIES = 3
+RETRY_DELAY = 30
+
+for attempt in range(1, MAX_RETRIES + 1):
+    try:
+        logging.info(f"Attempt {attempt}/{MAX_RETRIES}")
+        # Script already executed top-down
+        break
+    except Exception as e:
+        logging.error(f"Failure on attempt {attempt}")
+        logging.error(traceback.format_exc())
+        if attempt < MAX_RETRIES:
+            logging.info(f"Retrying in {RETRY_DELAY}s")
+            time.sleep(RETRY_DELAY)
+        else:
+            logging.critical("ALL RETRIES FAILED")
+            raise
